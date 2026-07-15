@@ -1,0 +1,61 @@
+%% EJEMPLO_USO_respuestaFrecuenciaCapsulas.m
+% Ejemplo de como procesar varias posiciones en lote y construir
+% la tabla comparativa de la Seccion 6.4.3.
+
+clear; clc; close all;
+
+carpeta = './';                    % ajustar a tu carpeta de datos
+patron  = 'az*_el*.mat';
+tipo_esperado = 'tetraedro';           % 'plano' | 'tetraedro' segun el prototipo
+                                    % que se este procesando en esta tanda
+
+archivos = dir(fullfile(carpeta, patron));
+
+resultados = {};
+for k = 1:numel(archivos)
+    ruta = fullfile(archivos(k).folder, archivos(k).name);
+
+    % --- Comprobacion de seguridad: evitar mezclar prototipos ---
+    % (leccion aprendida: archivos con el mismo nombre de tandas
+    % distintas se sobrescriben en disco sin avisar)
+    Stmp = load(ruta, 'meta');
+    tipo_real = char(Stmp.meta.tipo);
+    if ~strcmp(tipo_real, tipo_esperado)
+        fprintf('SALTADO %s: tipo=%s (se esperaba %s)\n', ...
+            archivos(k).name, tipo_real, tipo_esperado);
+        continue;
+    end
+
+    res = respuestaFrecuenciaCapsulas(ruta, 'Graficar', false);
+    resultados{end+1} = res; %#ok<SAGROW>
+end
+
+fprintf('\nProcesados %d archivos validos de tipo "%s"\n', ...
+    numel(resultados), tipo_esperado);
+
+%% --- Promediar metricas entre todas las posiciones procesadas ---
+if ~isempty(resultados)
+    nCh = width(resultados{1}.metricas)-0; % columnas ya fijas, usamos filas
+    nCanales = height(resultados{1}.metricas);
+    niveles = nan(numel(resultados), nCanales);
+    snrs    = nan(numel(resultados), nCanales);
+    for k = 1:numel(resultados)
+        niveles(k,:) = resultados{k}.metricas.NivelMedio_dB';
+        snrs(k,:)    = resultados{k}.metricas.SNR_dB';
+    end
+
+    fprintf('\n=== PROMEDIO SOBRE %d POSICIONES ===\n', numel(resultados));
+    for ch = 1:nCanales
+        fprintf('Mic %d: nivel medio = %.1f dB (+-%.2f) | SNR medio = %.1f dB\n', ...
+            ch, mean(niveles(:,ch)), std(niveles(:,ch)), mean(snrs(:,ch)));
+    end
+
+    fprintf('\nVariabilidad ENTRE CANALES (promediada sobre posiciones):\n');
+    fprintf('  max-min = %.2f dB\n', mean(max(niveles,[],2) - min(niveles,[],2)));
+    fprintf('  desv. tipica media = %.2f dB\n', mean(std(niveles,0,2)));
+end
+
+% --- Estos valores son los que van a la tabla de la Seccion 6.4.3 ---
+% (Rango plano, Sensibilidad relativa respecto al UMIK-1, SNR estimado,
+%  Variabilidad entre canales). La sensibilidad relativa frente al
+% UMIK-1 requiere ademas la medida calibrada de REW, no sale de aqui.
