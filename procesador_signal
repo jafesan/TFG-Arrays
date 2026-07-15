@@ -1,0 +1,70 @@
+function [IR, Hmag, f] = ensamblar_y_procesar()
+cfg = config_medicion();
+[excitation, inv_sweep, sweep] = genera_sweep(cfg);
+
+% --- Cargar los 4 canales ---
+recorded = [];
+for ch = 1:cfg.nCh
+    fichero = fullfile(cfg.carpeta, sprintf('canal_%d.mat', ch));
+    if ~exist(fichero,'file')
+        error('Falta el canal %d. Ejecuta: medir_canal(%d)', ch, ch);
+    end
+    S = load(fichero);
+    if isempty(recorded)
+        recorded = zeros(length(S.senalCanal), cfg.nCh);
+    end
+    recorded(:,ch) = S.senalCanal;
+    fprintf('Canal %d cargado (pico %.3f)\n', ch, S.pico);
+end
+fprintf('--> Los 4 canales presentes. Procesando...\n\n');
+
+% --- Deconvolucion por canal ---
+Lconv  = size(recorded,1)+length(inv_sweep)-1;
+IRfull = zeros(Lconv, cfg.nCh);
+for ch = 1:cfg.nCh
+    IRfull(:,ch) = conv(recorded(:,ch), inv_sweep);
+end
+
+% --- ALINEACION POR REFERENCIA COMUN ---
+energia    = sum(IRfull.^2,1);
+[~, chRef] = max(energia);
+[~, pkRef] = max(abs(IRfull(:,chRef)));
+
+IR_len = round(0.5*cfg.fs);
+pre    = 100;
+ini    = max(pkRef - pre, 1);
+IR     = IRfull(ini : ini+IR_len-1, :);
+
+% --- Respuesta en frecuencia ---
+NFFT = 2^nextpow2(size(IR,1));
+H    = fft(IR, NFFT);
+f    = (0:NFFT/2-1)*(cfg.fs/NFFT);
+Hmag = 20*log10(abs(H(1:NFFT/2,:)) + eps);
+
+% --- Retardos relativos entre capsulas ---
+fprintf('--- Retardos relativos entre capsulas ---\n');
+for ch = 1:cfg.nCh
+    [~, pkCh]  = max(abs(IR(:,ch)));
+    retardo_us = (pkCh - (pre+1)) / cfg.fs * 1e6;
+    fprintf('Canal %d: %+.1f us  (%.2f mm de dif. de camino)\n', ...
+        ch, retardo_us, retardo_us*1e-6*343*1000);
+end
+fprintf('\n');
+
+% --- Visualizacion ---
+figure('Name','IR por canal','Position',[100 100 900 600]);
+for ch = 1:cfg.nCh
+    subplot(cfg.nCh,1,ch);
+    plot((0:size(IR,1)-1)/cfg.fs*1000, IR(:,ch));
+    ylabel(sprintf('Ch %d',ch)); grid on; xlim([0 20]);
+    if ch==1, title('Respuesta al Impulso por canal (referencia comun)'); end
+end
+xlabel('Tiempo (ms)');
+
+figure('Name','Respuesta en frecuencia','Position',[100 100 900 600]);
+semilogx(f, Hmag, 'LineWidth',1.2);
+grid on; xlim([cfg.f1 cfg.f2]);
+xlabel('Frecuencia (Hz)'); ylabel('Magnitud (dB)');
+title('Respuesta en Frecuencia - Array tetraedrico 4 canales');
+legend(arrayfun(@(x) sprintf('Ch %d',x),1:cfg.nCh,'UniformOutput',false));
+end
