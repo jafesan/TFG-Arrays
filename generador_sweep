@@ -1,0 +1,18 @@
+function [excitation, inv_sweep, sweep] = genera_sweep(cfg)
+t  = (0:1/cfg.fs:cfg.T-1/cfg.fs)';
+N  = length(t);
+w1 = 2*pi*cfg.f1;  w2 = 2*pi*cfg.f2;
+L  = cfg.T / log(w2/w1);
+K  = cfg.T*w1 / log(w2/w1);
+sweep = sin(K * (exp(t/L) - 1));
+
+fl  = round(0.01*cfg.fs);
+win = ones(N,1);
+win(1:fl)          = (1-cos(pi*(0:fl-1)'/fl))/2;
+win(end-fl+1:end)  = (1+cos(pi*(0:fl-1)'/fl))/2;
+sweep = sweep .* win;
+
+excitation = [sweep; zeros(round(cfg.T_silence*cfg.fs),1)];
+inv_sweep  = flipud(sweep) .* exp(-t/L);
+inv_sweep  = inv_sweep / max(abs(inv_sweep));
+end
