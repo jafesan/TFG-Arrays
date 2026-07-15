@@ -1,0 +1,48 @@
+function medir_canal(canal)
+% medir_canal(2)  -> mide y guarda el canal 2
+cfg = config_medicion();
+[excitation, ~, ~] = genera_sweep(cfg);
+
+dw = audioDeviceWriter('SampleRate', cfg.fs, ...
+    'SupportVariableSizeInput', true);
+dr = audioDeviceReader('Device', cfg.nombreArray, ...
+    'NumChannels', cfg.nCh, ...
+    'SampleRate', cfg.fs, ...
+    'SamplesPerFrame', cfg.frameLen, ...
+    'OutputDataType', 'double');
+
+nFrames  = floor(length(excitation)/cfg.frameLen);
+recorded = zeros(nFrames*cfg.frameLen, cfg.nCh);
+
+setup(dr);
+for k = 1:5, dr(); end       % pre-rodaje (constante en todas las pasadas)
+
+fprintf('>> Midiendo CANAL %d ... (reproduciendo sweep)\n', canal);
+idx = 1;
+for k = 1:nFrames
+    rng = idx:idx+cfg.frameLen-1;
+    dw(excitation(rng));
+    recorded(rng,:) = dr();
+    idx = idx + cfg.frameLen;
+end
+release(dw); release(dr);
+
+% Extrae SOLO el canal pedido
+senalCanal = recorded(:, canal);
+
+% Comprobacion de calidad
+pico = max(abs(senalCanal));
+fprintf('   Canal %d: pico = %.3f', canal, pico);
+if pico > 0.99
+    fprintf('  <-- SATURADO, baja volumen y repite\n');
+elseif pico < 0.01
+    fprintf('  <-- MUY BAJO / capsula muerta? revisa\n');
+else
+    fprintf('  OK\n');
+end
+
+% Guarda en disco
+fichero = fullfile(cfg.carpeta, sprintf('canal_%d.mat', canal));
+save(fichero, 'senalCanal', 'cfg', 'canal', 'pico');
+fprintf('   Guardado en %s\n', fichero);
+end
