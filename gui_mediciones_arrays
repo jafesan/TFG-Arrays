@@ -1,0 +1,404 @@
+%% INTERFAZ DE MEDICION IR - Array plano / tetraedro
+%  GUI por posiciones angulares. Graba 4 canales por posicion.
+%  macOS / CoreAudio
+%
+%  Uso: escribe  medicion_gui  en la consola de MATLAB.
+%
+%  - Pregunta si el array es PLANO o TETRAEDRO.
+%  - PLANO:     azimut 0->180 cada 20 grados (10 posiciones).
+%  - TETRAEDRO: azimut x elevacion 0->180 cada 20 grados (100 posiciones).
+%  - En cada posicion indica cuanto mover el microfono, graba 4 canales
+%    al pulsar GRABAR, y guarda el resultado etiquetado por angulo.
+%  - Boton "Repetir grabacion" para rehacer la ultima toma.
+%  - Al terminar: guarda todo y genera graficas resumen.
+
+% ---------- Parametros de medicion (comunes) ----------
+S.fs        = 48000;
+S.f1        = 20;
+S.f2        = 20000;
+S.T         = 5;            % duracion del sweep (s)
+S.T_silence = 2;            % silencio para capturar la cola (s)
+S.nCh       = 4;
+S.frameLen  = 1024;
+S.nombreArray = 'USB Camera-B4.09.24.1';
+
+% ---------- Estado de la sesion ----------
+S.tipo       = '';      % 'plano' o 'tetraedro'
+S.posiciones = [];      % lista de [azimut elevacion] a medir
+S.idx        = 1;       % posicion actual
+S.carpeta    = '';
+
+% ---------- Construir GUI ----------
+S.fig = uifigure('Name','Medicion IR - Array','Position',[300 200 560 420]);
+
+S.lblTitulo = uilabel(S.fig,'Position',[30 360 500 30], ...
+    'Text','Selecciona el tipo de array','FontSize',18,'FontWeight','bold');
+
+% Botones de seleccion de array
+S.btnPlano = uibutton(S.fig,'Position',[60 290 200 50], ...
+    'Text','Array PLANO (azimut)','FontSize',14, ...
+    'ButtonPushedFcn',@(b,e) seleccionarTipo('plano'));
+S.btnTetra = uibutton(S.fig,'Position',[300 290 200 50], ...
+    'Text','Array TETRAEDRO (az + elev)','FontSize',14, ...
+    'ButtonPushedFcn',@(b,e) seleccionarTipo('tetraedro'));
+
+% Panel de instruccion (oculto al principio)
+S.lblInstr = uilabel(S.fig,'Position',[30 200 500 70], ...
+    'Text','','FontSize',16,'WordWrap','on','Visible','off', ...
+    'HorizontalAlignment','center');
+
+S.lblProgreso = uilabel(S.fig,'Position',[30 150 500 30], ...
+    'Text','','FontSize',13,'Visible','off', ...
+    'HorizontalAlignment','center','FontColor',[0.3 0.3 0.3]);
+
+% Botones de accion (ocultos al principio)
+S.btnGrabar = uibutton(S.fig,'Position',[60 80 230 55], ...
+    'Text','GRABAR esta posicion','FontSize',15,'FontWeight','bold', ...
+    'BackgroundColor',[0.2 0.6 0.3],'FontColor','w', ...
+    'Visible','off','ButtonPushedFcn',@(b,e) grabarPosicion());
+
+S.btnRepetir = uibutton(S.fig,'Position',[300 80 200 55], ...
+    'Text','Repetir grabacion','FontSize',14, ...
+    'BackgroundColor',[0.85 0.75 0.2],'FontColor','k', ...
+    'Visible','off','Enable','off','ButtonPushedFcn',@(b,e) repetirPosicion());
+
+S.lblEstado = uilabel(S.fig,'Position',[30 30 500 30], ...
+    'Text','','FontSize',13,'Visible','off', ...
+    'HorizontalAlignment','center');
+
+guidata(S.fig, S);
+
+% =================================================================
+%  CALLBACK: seleccion de tipo de array
+% =================================================================
+    function seleccionarTipo(tipo)
+       S = guidata(S.fig);
+        S.tipo = tipo;
+        if strcmp(tipo,'plano')
+            % Solo azimut -> 10 posiciones (paso 20 grados)
+            ang = 0:20:180;
+            S.posiciones = [ang(:), zeros(numel(ang),1)];
+            S.carpeta = 'mediciones_plano';
+        else
+            % Azimut x elevacion -> 25 posiciones (paso 45 grados)
+            ang = 0:45:180;   % 0 45 90 135 180 -> 5 valores
+            [A,E] = meshgrid(ang, ang);
+            S.posiciones = [A(:), E(:)];
+            % Ordenar: para cada elevacion, recorre todos los azimut
+            S.posiciones = sortrows(S.posiciones,[2 1]);
+            S.carpeta = 'mediciones_tetraedro';
+        end
+
+        if ~exist(S.carpeta,'dir'), mkdir(S.carpeta); end
+        S.idx = 1;
+
+        % Ocultar seleccion, mostrar medicion
+        S.btnPlano.Visible = 'off';
+        S.btnTetra.Visible = 'off';
+        S.lblInstr.Visible    = 'on';
+        S.lblProgreso.Visible = 'on';
+        S.btnGrabar.Visible   = 'on';
+        S.btnRepetir.Visible  = 'on';
+        S.lblEstado.Visible   = 'on';
+        S.lblTitulo.Text = sprintf('Midiendo array %s', upper(tipo));
+
+        guidata(S.fig, S);
+        mostrarPosicion();
+    end
+
+% =================================================================
+%  Mostrar instruccion de la posicion actual
+% =================================================================
+    function mostrarPosicion()
+        S = guidata(S.fig);
+        nTotal = size(S.posiciones,1);
+
+        if S.idx > nTotal
+            finalizar();
+            return;
+        end
+
+        az = S.posiciones(S.idx,1);
+        el = S.posiciones(S.idx,2);
+
+        % Construir instruccion de movimiento
+        if S.idx == 1
+            if strcmp(S.tipo,'plano')
+                instr = sprintf('Coloca el array en AZIMUT = %d grados (posicion inicial)', az);
+            else
+                instr = sprintf('Coloca el array en AZIMUT = %d, ELEVACION = %d (posicion inicial)', az, el);
+            end
+        else
+            azAnt = S.posiciones(S.idx-1,1);
+            elAnt = S.posiciones(S.idx-1,2);
+            dAz = az - azAnt;
+            dEl = el - elAnt;
+
+            partes = {};
+            if dAz ~= 0
+                if dAz > 0
+                    partes{end+1} = sprintf('GIRA AZIMUT +%d grados (a %d)', dAz, az);
+                else
+                    partes{end+1} = sprintf('AZIMUT vuelve a %d grados', az);
+                end
+            end
+            if dEl ~= 0
+                if dEl > 0
+                    partes{end+1} = sprintf('SUBE ELEVACION +%d grados (a %d)', dEl, el);
+                else
+                    partes{end+1} = sprintf('ELEVACION vuelve a %d grados', el);
+                end
+            end
+            instr = strjoin(partes, '  +  ');
+        end
+
+        S.lblInstr.Text = instr;
+        if strcmp(S.tipo,'plano')
+            S.lblProgreso.Text = sprintf('Posicion %d de %d   |   Azimut actual: %d grados', ...
+                S.idx, nTotal, az);
+        else
+            S.lblProgreso.Text = sprintf('Posicion %d de %d   |   Az: %d   Elev: %d', ...
+                S.idx, nTotal, az, el);
+        end
+        S.lblEstado.Text = 'Coloca el microfono y pulsa GRABAR';
+        S.lblEstado.FontColor = [0 0 0];
+        S.btnRepetir.Enable = 'off';   % nada que repetir hasta grabar
+        guidata(S.fig, S);
+    end
+
+% =================================================================
+%  CALLBACK: grabar la posicion actual y AVANZAR
+% =================================================================
+    function grabarPosicion()
+        ok = capturarYGuardar();
+        if ~ok, return; end
+
+        S = guidata(S.fig);
+        % Habilitar repetir (acabamos de grabar esta posicion)
+        S.btnRepetir.Enable = 'on';
+        % Avanzar a la siguiente
+        S.idx = S.idx + 1;
+        guidata(S.fig, S);
+        pause(1.0);
+        mostrarPosicion();
+    end
+
+% =================================================================
+%  CALLBACK: repetir la grabacion de la posicion actual (NO avanza)
+% =================================================================
+    function repetirPosicion()
+        S = guidata(S.fig);
+        % La posicion a repetir es la ANTERIOR (ya avanzamos tras grabar)
+        S.idx = S.idx - 1;
+        guidata(S.fig, S);
+
+        ok = capturarYGuardar();
+        if ~ok
+            % si falla, restaurar indice
+            S = guidata(S.fig);
+            S.idx = S.idx + 1;
+            guidata(S.fig, S);
+            return;
+        end
+
+        S = guidata(S.fig);
+        S.idx = S.idx + 1;   % volver a dejar el indice en la siguiente
+        guidata(S.fig, S);
+        pause(1.0);
+        mostrarPosicion();
+    end
+
+% =================================================================
+%  Captura + guardado de la posicion S.idx (sin avanzar indice)
+%  Devuelve true si todo fue bien
+% =================================================================
+    function ok = capturarYGuardar()
+        ok = false;
+        S = guidata(S.fig);
+        az = S.posiciones(S.idx,1);
+        el = S.posiciones(S.idx,2);
+
+        % Bloquear botones durante la grabacion
+        S.btnGrabar.Enable  = 'off';
+        S.btnRepetir.Enable = 'off';
+        S.lblEstado.Text = 'GRABANDO... (sonara el sweep, no muevas el array)';
+        S.lblEstado.FontColor = [0.8 0.3 0];
+        drawnow;
+
+        try
+            [recorded, picos] = capturar(S);
+        catch ME
+            S.lblEstado.Text = sprintf('ERROR: %s', ME.message);
+            S.lblEstado.FontColor = [0.9 0 0];
+            S.btnGrabar.Enable = 'on';
+            guidata(S.fig, S);
+            return;
+        end
+
+        % Guardar etiquetado por angulo
+        nombre = sprintf('az%03d_el%03d.mat', az, el);
+        fichero = fullfile(S.carpeta, nombre);
+        meta.az = az; meta.el = el; meta.tipo = S.tipo;
+        cfg = struct('fs',S.fs,'f1',S.f1,'f2',S.f2,'T',S.T, ...
+                     'T_silence',S.T_silence,'nCh',S.nCh);
+        save(fichero, 'recorded', 'picos', 'meta', 'cfg');
+
+        avisos = '';
+        if any(picos > 0.99), avisos = ' [ALGUN CANAL SATURADO!]'; end
+        if all(picos < 0.01), avisos = ' [SIN SENAL - revisa array]'; end
+        S.lblEstado.Text = sprintf('Guardado %s  (picos: %s)%s', ...
+            nombre, mat2str(round(picos,2)), avisos);
+        S.lblEstado.FontColor = [0 0.5 0];
+
+        S.btnGrabar.Enable  = 'on';
+        guidata(S.fig, S);
+        ok = true;
+    end
+
+% =================================================================
+%  Captura de audio (sweep + grabacion 4 canales)
+% =================================================================
+    function [recorded, picos] = capturar(S)
+        % Sweep Farina
+        t  = (0:1/S.fs:S.T-1/S.fs)';
+        N  = length(t);
+        w1 = 2*pi*S.f1;  w2 = 2*pi*S.f2;
+        L  = S.T / log(w2/w1);
+        K  = S.T*w1 / log(w2/w1);
+        sweep = sin(K * (exp(t/L) - 1));
+        fl  = round(0.01*S.fs);
+        win = ones(N,1);
+        win(1:fl)         = (1-cos(pi*(0:fl-1)'/fl))/2;
+        win(end-fl+1:end) = (1+cos(pi*(0:fl-1)'/fl))/2;
+        sweep = sweep .* win;
+        excitation = [sweep; zeros(round(S.T_silence*S.fs),1)];
+
+        dw = audioDeviceWriter('SampleRate', S.fs, ...
+                               'SupportVariableSizeInput', true);
+        dr = audioDeviceReader('Device', S.nombreArray, ...
+                               'NumChannels', S.nCh, ...
+                               'SampleRate', S.fs, ...
+                               'SamplesPerFrame', S.frameLen, ...
+                               'OutputDataType', 'double');
+
+        nFrames  = floor(length(excitation)/S.frameLen);
+        recorded = zeros(nFrames*S.frameLen, S.nCh);
+
+        setup(dr);
+        for k = 1:5, dr(); end   % pre-rodaje
+
+        idx = 1;
+        for k = 1:nFrames
+            rng = idx:idx+S.frameLen-1;
+            dw(excitation(rng));
+            recorded(rng,:) = dr();
+            idx = idx + S.frameLen;
+        end
+        release(dw); release(dr);
+
+        picos = max(abs(recorded),[],1);
+    end
+
+% =================================================================
+%  Finalizar: graficas resumen
+% =================================================================
+    function finalizar()
+        S = guidata(S.fig);
+        S.lblInstr.Text = 'MEDICION COMPLETA';
+        S.lblProgreso.Text = sprintf('Se han guardado %d posiciones en la carpeta "%s"', ...
+            size(S.posiciones,1), S.carpeta);
+        S.btnGrabar.Visible  = 'off';
+        S.btnRepetir.Visible = 'off';
+        S.lblEstado.Text = 'Generando graficas resumen...';
+        S.lblEstado.FontColor = [0 0 0];
+        drawnow;
+
+        generarResumen(S);
+
+        S.lblEstado.Text = 'Listo. Revisa las figuras y la carpeta de resultados.';
+        guidata(S.fig, S);
+    end
+
+% =================================================================
+%  Graficas resumen de todas las posiciones
+% =================================================================
+    function generarResumen(S)
+        % Filtro inverso para deconvolucion
+        t  = (0:1/S.fs:S.T-1/S.fs)';
+        w1 = 2*pi*S.f1;  w2 = 2*pi*S.f2;
+        L  = S.T / log(w2/w1);
+        K  = S.T*w1 / log(w2/w1);
+        sweep = sin(K * (exp(t/L) - 1));
+        fl  = round(0.01*S.fs);
+        N = length(t); win = ones(N,1);
+        win(1:fl)         = (1-cos(pi*(0:fl-1)'/fl))/2;
+        win(end-fl+1:end) = (1+cos(pi*(0:fl-1)'/fl))/2;
+        sweep = sweep .* win;
+        inv_sweep = flipud(sweep) .* exp(-t/L);
+        inv_sweep = inv_sweep / max(abs(inv_sweep));
+
+        ficheros = dir(fullfile(S.carpeta,'az*_el*.mat'));
+        if isempty(ficheros), return; end
+
+        azL = []; elL = []; magMedia = [];
+        figIR = figure('Name','Respuestas en frecuencia por posicion', ...
+                       'Position',[100 100 950 600]);
+        ax = axes(figIR); hold(ax,'on');
+
+        for ii = 1:numel(ficheros)
+            D = load(fullfile(S.carpeta, ficheros(ii).name));
+            rec = D.recorded;
+
+            % IR del canal con mas energia (referencia de la posicion)
+            IRfull = zeros(size(rec,1)+length(inv_sweep)-1, size(rec,2));
+            for ch = 1:size(rec,2)
+                IRfull(:,ch) = conv(rec(:,ch), inv_sweep);
+            end
+            [~, chRef] = max(sum(IRfull.^2,1));
+            [~, pk]    = max(abs(IRfull(:,chRef)));
+            IR_len = round(0.2*S.fs);
+            ini = max(pk-100,1);
+            IR = IRfull(ini:ini+IR_len-1, chRef);
+
+            NFFT = 2^nextpow2(length(IR));
+            H = fft(IR, NFFT);
+            f = (0:NFFT/2-1)*(S.fs/NFFT);
+            Hmag = 20*log10(abs(H(1:NFFT/2)) + eps);
+
+            semilogx(ax, f, Hmag, 'LineWidth',1, ...
+                'DisplayName', sprintf('az%d el%d', D.meta.az, D.meta.el));
+
+            azL(end+1)      = D.meta.az;
+            elL(end+1)      = D.meta.el;
+            banda = f>=200 & f<=8000;
+            magMedia(end+1) = mean(Hmag(banda));
+        end
+
+        grid(ax,'on'); xlim(ax,[S.f1 S.f2]);
+        xlabel(ax,'Frecuencia (Hz)'); ylabel(ax,'Magnitud (dB)');
+        title(ax,sprintf('Respuestas en frecuencia - array %s', S.tipo));
+        if numel(ficheros) <= 12, legend(ax,'show','Location','southwest'); end
+
+        % Mapa de directividad
+        if strcmp(S.tipo,'plano')
+            figure('Name','Directividad (plano)','Position',[120 120 700 450]);
+            [azS, ord] = sort(azL);
+            plot(azS, magMedia(ord),'-o','LineWidth',1.5);
+            grid on; xlabel('Azimut (grados)');
+            ylabel('Magnitud media 200-8k Hz (dB)');
+            title('Directividad horizontal del array plano');
+        else
+            figure('Name','Directividad (tetraedro)','Position',[120 120 750 550]);
+            azU = unique(azL); elU = unique(elL);
+            M = nan(numel(elU), numel(azU));
+            for ii = 1:numel(azL)
+                r = find(elU==elL(ii)); c = find(azU==azL(ii));
+                M(r,c) = magMedia(ii);
+            end
+            imagesc(azU, elU, M); axis xy; colorbar;
+            xlabel('Azimut (grados)'); ylabel('Elevacion (grados)');
+            title('Directividad 2D del array tetraedro (dB, 200-8k Hz)');
+        end
+    end
+
+end
