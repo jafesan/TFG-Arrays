@@ -1,34 +1,18 @@
-%% INTERFAZ DE MEDICION IR - Array plano / tetraedro
-%  GUI por posiciones angulares. Graba 4 canales por posicion.
-%  macOS / CoreAudio
-%
-%  Uso: escribe  medicion_gui  en la consola de MATLAB.
-%
-%  - Pregunta si el array es PLANO o TETRAEDRO.
-%  - PLANO:     azimut 0->180 cada 20 grados (10 posiciones).
-%  - TETRAEDRO: azimut x elevacion 0->180 cada 20 grados (100 posiciones).
-%  - En cada posicion indica cuanto mover el microfono, graba 4 canales
-%    al pulsar GRABAR, y guarda el resultado etiquetado por angulo.
-%  - Boton "Repetir grabacion" para rehacer la ultima toma.
-%  - Al terminar: guarda todo y genera graficas resumen.
-
-% ---------- Parametros de medicion (comunes) ----------
+%INTERFAZ DE MEDICION Array plano / tetraedro
 S.fs        = 48000;
 S.f1        = 20;
 S.f2        = 20000;
 S.T         = 5;            % duracion del sweep (s)
-S.T_silence = 2;            % silencio para capturar la cola (s)
+S.T_silence = 2;            % silencio para capturar
 S.nCh       = 4;
 S.frameLen  = 1024;
 S.nombreArray = 'USB Camera-B4.09.24.1';
 
-% ---------- Estado de la sesion ----------
 S.tipo       = '';      % 'plano' o 'tetraedro'
 S.posiciones = [];      % lista de [azimut elevacion] a medir
 S.idx        = 1;       % posicion actual
 S.carpeta    = '';
 
-% ---------- Construir GUI ----------
 S.fig = uifigure('Name','Medicion IR - Array','Position',[300 200 560 420]);
 
 S.lblTitulo = uilabel(S.fig,'Position',[30 360 500 30], ...
@@ -42,7 +26,7 @@ S.btnTetra = uibutton(S.fig,'Position',[300 290 200 50], ...
     'Text','Array TETRAEDRO (az + elev)','FontSize',14, ...
     'ButtonPushedFcn',@(b,e) seleccionarTipo('tetraedro'));
 
-% Panel de instruccion (oculto al principio)
+% Panel de instruccion
 S.lblInstr = uilabel(S.fig,'Position',[30 200 500 70], ...
     'Text','','FontSize',16,'WordWrap','on','Visible','off', ...
     'HorizontalAlignment','center');
@@ -51,7 +35,7 @@ S.lblProgreso = uilabel(S.fig,'Position',[30 150 500 30], ...
     'Text','','FontSize',13,'Visible','off', ...
     'HorizontalAlignment','center','FontColor',[0.3 0.3 0.3]);
 
-% Botones de accion (ocultos al principio)
+% Botones de accion
 S.btnGrabar = uibutton(S.fig,'Position',[60 80 230 55], ...
     'Text','GRABAR esta posicion','FontSize',15,'FontWeight','bold', ...
     'BackgroundColor',[0.2 0.6 0.3],'FontColor','w', ...
@@ -68,9 +52,6 @@ S.lblEstado = uilabel(S.fig,'Position',[30 30 500 30], ...
 
 guidata(S.fig, S);
 
-% =================================================================
-%  CALLBACK: seleccion de tipo de array
-% =================================================================
     function seleccionarTipo(tipo)
        S = guidata(S.fig);
         S.tipo = tipo;
@@ -106,9 +87,6 @@ guidata(S.fig, S);
         mostrarPosicion();
     end
 
-% =================================================================
-%  Mostrar instruccion de la posicion actual
-% =================================================================
     function mostrarPosicion()
         S = guidata(S.fig);
         nTotal = size(S.posiciones,1);
@@ -166,9 +144,6 @@ guidata(S.fig, S);
         guidata(S.fig, S);
     end
 
-% =================================================================
-%  CALLBACK: grabar la posicion actual y AVANZAR
-% =================================================================
     function grabarPosicion()
         ok = capturarYGuardar();
         if ~ok, return; end
@@ -183,9 +158,6 @@ guidata(S.fig, S);
         mostrarPosicion();
     end
 
-% =================================================================
-%  CALLBACK: repetir la grabacion de la posicion actual (NO avanza)
-% =================================================================
     function repetirPosicion()
         S = guidata(S.fig);
         % La posicion a repetir es la ANTERIOR (ya avanzamos tras grabar)
@@ -208,10 +180,6 @@ guidata(S.fig, S);
         mostrarPosicion();
     end
 
-% =================================================================
-%  Captura + guardado de la posicion S.idx (sin avanzar indice)
-%  Devuelve true si todo fue bien
-% =================================================================
     function ok = capturarYGuardar()
         ok = false;
         S = guidata(S.fig);
@@ -255,9 +223,6 @@ guidata(S.fig, S);
         ok = true;
     end
 
-% =================================================================
-%  Captura de audio (sweep + grabacion 4 canales)
-% =================================================================
     function [recorded, picos] = capturar(S)
         % Sweep Farina
         t  = (0:1/S.fs:S.T-1/S.fs)';
@@ -299,9 +264,6 @@ guidata(S.fig, S);
         picos = max(abs(recorded),[],1);
     end
 
-% =================================================================
-%  Finalizar: graficas resumen
-% =================================================================
     function finalizar()
         S = guidata(S.fig);
         S.lblInstr.Text = 'MEDICION COMPLETA';
@@ -319,9 +281,6 @@ guidata(S.fig, S);
         guidata(S.fig, S);
     end
 
-% =================================================================
-%  Graficas resumen de todas las posiciones
-% =================================================================
     function generarResumen(S)
         % Filtro inverso para deconvolucion
         t  = (0:1/S.fs:S.T-1/S.fs)';
