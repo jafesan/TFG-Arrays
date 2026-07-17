@@ -6,7 +6,7 @@ cfg.T         = 5;             % duracion sweep (s)
 cfg.T_silence = 2;             % silencio cola (s)
 cfg.nCh       = 4;             % canales del array
 cfg.frameLen  = 1024;
-cfg.nombreArray = 'USB Camera-B4.09.24.1';  % ajusta si cambia
+cfg.nombreArray = 'USB Camera-B4.09.24.1';  % ajustar con cambio de placa
 %'USB Camera-B4.09.24.1'
 cfg.carpeta   = 'mediciones_tetraedrico';   % donde se guardan canales
 if ~exist(cfg.carpeta,'dir'), mkdir(cfg.carpeta); end
