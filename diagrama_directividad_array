@@ -1,0 +1,146 @@
+clear; clc; close all;
+
+patron          = 'az*_el000.mat';
+ventana_pre_ms  = 2;                   
+ventana_post_ms = 10;                  
+piso_dB         = -40;                 
+c_sonido        = 343;                 
+
+configs = {
+    'd1', 'd1_60mm', 0.060;
+    'd2', 'd2_36mm', 0.036;
+    'd3', 'd3_12mm', 0.012
+};
+
+colores = [0.85 0 0; 0 0.35 0.75; 0.10 0.60 0.20];  % rojo, azul, verde
+
+nConf = size(configs,1);
+resultados = struct('nombre',{},'d',{},'theta',{},'dB',{});
+
+for c = 1:nConf
+    nombre  = configs{c,1};
+    carpeta = configs{c,2};
+    d_array = configs{c,3};
+
+    if ~isfolder(carpeta)
+        warning('Carpeta "%s" no encontrada, se omite %s.', carpeta, nombre);
+        continue;
+    end
+
+    [theta, dB_full] = procesar_directividad_array(carpeta, patron, ...
+        ventana_pre_ms, ventana_post_ms, piso_dB);
+
+    resultados(end+1) = struct('nombre', nombre, 'd', d_array, ...
+        'theta', theta, 'dB', dB_full); 
+
+    figure('Name', sprintf('Directividad array - %s', nombre), 'Color', 'w');
+    pax = polaraxes;
+    polarplot(pax, theta, dB_full, '-o', 'LineWidth', 2, 'Color', [0.85 0 0]);
+    pax.RLim = [piso_dB 0];
+    pax.ThetaZeroLocation = 'top';
+    pax.ThetaDir = 'clockwise';
+    title(pax, sprintf('Directividad del array completo (%s, d=%.0f mm, broadside en 0%s)', ...
+        nombre, d_array*1000, char(176)));
+end
+
+if numel(resultados) > 1
+    figure('Name', 'Comparativa directividad d1/d2/d3', 'Color', 'w');
+    pax = polaraxes;
+    hold(pax, 'on');
+    leyenda = cell(numel(resultados),1);
+
+    for c = 1:numel(resultados)
+        polarplot(pax, resultados(c).theta, resultados(c).dB, '-o', ...
+            'LineWidth', 1.8, 'Color', colores(c,:), 'MarkerSize', 4);
+        leyenda{c} = sprintf('%s (d=%.0f mm)', resultados(c).nombre, resultados(c).d*1000);
+    end
+
+    pax.RLim = [piso_dB 0];
+    pax.ThetaZeroLocation = 'top';
+    pax.ThetaDir = 'clockwise';
+    title(pax, 'Comparativa de directividad del array por separacion');
+    legend(pax, leyenda, 'Location', 'southoutside', 'Orientation', 'horizontal');
+end
+
+
+
+function [theta, dB_full] = procesar_directividad_array(carpeta, patron, ...
+    ventana_pre_ms, ventana_post_ms, piso_dB)
+
+    files = dir(fullfile(carpeta, patron));
+    if isempty(files)
+        error('No se encontraron ficheros %s en %s', patron, carpeta);
+    end
+
+    nFiles = numel(files);
+    az_deg = zeros(nFiles,1);
+    data   = cell(nFiles,1);
+
+    for i = 1:nFiles
+        S = load(fullfile(files(i).folder, files(i).name));
+        az_deg(i) = S.meta(1,1).az;
+        data{i}   = S;
+    end
+
+    [az_deg, orden] = sort(az_deg);
+    data = data(orden);
+
+    cfg0 = data{1}.cfg(1,1);
+    fs = cfg0.fs; f1 = cfg0.f1; f2 = cfg0.f2; T = cfg0.T;
+    nCh = cfg0.nCh;
+
+    fprintf('[%s] fs=%d Hz | f1=%d Hz | f2=%d Hz | T=%.1f s | nCh=%d | %d angulos\n', ...
+        carpeta, fs, f1, f2, T, nCh, nFiles);
+
+    t = (0:1/fs:T-1/fs)';
+    R = log(f2/f1);
+    x = sin((2*pi*f1*T/R) * (exp(t*R/T) - 1));
+    w = exp(-t*R/T);
+    k = flipud(x) .* w;
+    k = k / max(abs(k));
+
+    muestras_pre  = round(ventana_pre_ms  * fs/1000);
+    muestras_post = round(ventana_post_ms * fs/1000);
+
+    energia_array = zeros(nFiles, 1);
+
+    for i = 1:nFiles
+        rec = data{i}.recorded;
+        ir  = zeros(size(rec,1) + length(k) - 1, nCh);
+        idxPico_ch = zeros(nCh,1);
+
+        for ch = 1:nCh
+            ir(:,ch) = conv(rec(:,ch), k, 'full');
+            [~, idxPico_ch(ch)] = max(abs(ir(:,ch)));
+        end
+
+        idxPico = round(mean(idxPico_ch));
+        idxIni = max(1, idxPico - muestras_pre);
+        idxFin = min(size(ir,1), idxPico + muestras_post);
+
+        tramo_suma = sum(ir(idxIni:idxFin, :), 2);
+        energia_array(i) = sum(tramo_suma.^2);
+    end
+
+    energia_norm = energia_array / max(energia_array);
+    nivel_dB = 10*log10(energia_norm);
+    nivel_dB(nivel_dB < piso_dB) = piso_dB;
+
+    az_full = az_deg;
+    dB_full = nivel_dB;
+
+    for i = 1:nFiles
+        az = az_deg(i);
+        if az ~= 0 && az ~= 180
+            az_full = [az_full; 360 - az]; 
+            dB_full = [dB_full; nivel_dB(i)]; 
+        end
+    end
+
+    [az_full, orden2] = sort(az_full);
+    dB_full = dB_full(orden2);
+
+    theta = deg2rad(az_full);
+    theta(end+1) = theta(1) + 2*pi;
+    dB_full(end+1) = dB_full(1);
+end
