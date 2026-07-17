@@ -1,0 +1,73 @@
+function res = mapaIntensidadBformat(archivo_mat, varargin)
+
+    p = inputParser;
+    addParameter(p,'BandaUtil',[200 7000]);
+    addParameter(p,'Ventana',1024);
+    parse(p,varargin{:});
+    opt = p.Results;
+
+    S = load(archivo_mat);
+    fs = double(S.cfg.fs); f1 = double(S.cfg.f1);
+    f2 = double(S.cfg.f2); T  = double(S.cfg.T);
+    az_real = double(S.meta.az); el_real = double(S.meta.el);
+    rec = double(S.recorded);
+
+    N = round(T*fs); t = (0:N-1)'/fs; R = log(f2/f1);
+    sweep = sin(2*pi*f1*T/R*(exp(t*R/T)-1));
+    inv_filt = flipud(sweep) ./ exp(t*R/T);
+    Nfft = 2^nextpow2(length(rec)+length(inv_filt)-1);
+    Hinv = fft(inv_filt, Nfft);
+    IR = zeros(Nfft, 4);
+    for ch = 1:4
+        IR(:,ch) = real(ifft(fft(rec(:,ch),Nfft) .* Hinv));
+    end
+    [~,pico] = max(abs(IR(:,1)));
+    idx = max(1,pico-64):min(Nfft,pico+opt.Ventana);
+    IRw = IR(idx,:);
+
+    Mic1=IRw(:,1); Mic2=IRw(:,2); Mic3=IRw(:,3); Mic4=IRw(:,4);
+    W = 0.5*(Mic1+Mic2+Mic3+Mic4);
+    X = 0.5*(Mic1+Mic2-Mic3-Mic4);
+    Y = 0.5*(Mic1-Mic2+Mic3-Mic4);
+    Z = 0.5*(Mic1-Mic2-Mic3+Mic4);
+
+    corrWY = corr(W,Y); corrXZ = corr(X,Z);
+    if abs(corrWY) > 0.9 || abs(corrXZ) > 0.9
+        warning('mapaIntensidadBformat:degeneracion', ...
+            ['El B-format de esta posicion esta degenerado (|corr(W,Y)|=%.2f, ' ...
+             '|corr(X,Z)|=%.2f). El mapa que se va a generar NO tiene significado ' ...
+             'direccional real; se recomienda no usarlo en la memoria salvo como ' ...
+             'ejemplo explicito de esta limitacion.'], corrWY, corrXZ);
+    end
+
+    Nresp = 2^nextpow2(size(IRw,1));
+    Wf = fft(W,Nresp); Xf = fft(X,Nresp); Yf = fft(Y,Nresp); Zf = fft(Z,Nresp);
+    f_axis = (0:Nresp/2-1)'*(fs/Nresp);
+    banda = f_axis >= opt.BandaUtil(1) & f_axis <= opt.BandaUtil(2);
+
+    Ix = sum(real(conj(Wf(banda)) .* Xf(banda)));
+    Iy = sum(real(conj(Wf(banda)) .* Yf(banda)));
+    Iz = sum(real(conj(Wf(banda)) .* Zf(banda)));
+
+    az_est = mod(atan2d(Iy, Ix), 360);
+    el_est = atan2d(Iz, hypot(Ix,Iy));
+
+    fprintf('\n=== Mapa de intensidad: %s (az_real=%d, el_real=%d) ===\n', ...
+        archivo_mat, az_real, el_real);
+    fprintf('Direccion de maxima intensidad: az_est=%.1f, el_est=%.1f\n', az_est, el_est);
+
+    figure('Color','w');
+    theta = linspace(0,2*pi,200);
+    polarplot(theta, ones(size(theta)), ':', 'Color',[0.7 0.7 0.7]); hold on;
+    polarplot([0 deg2rad(az_est)], [0 1], '-o', 'LineWidth',2, 'Color','r', ...
+        'DisplayName','Direccion estimada');
+    polarplot([0 deg2rad(az_real)], [0 1], '-o', 'LineWidth',2, 'Color',[0 0.6 0], ...
+        'DisplayName','Direccion real');
+    legend('Location','southoutside');
+    title(sprintf('Mapa direccional de intensidad - %s', archivo_mat), 'Interpreter','none');
+
+    res.az_est = az_est; res.el_est = el_est;
+    res.az_real = az_real; res.el_real = el_real;
+    res.corrWY = corrWY; res.corrXZ = corrXZ;
+    res.I = [Ix Iy Iz];
+end
