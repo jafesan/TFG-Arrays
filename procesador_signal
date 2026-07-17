@@ -2,7 +2,7 @@ function [IR, Hmag, f] = ensamblar_y_procesar()
 cfg = config_medicion();
 [excitation, inv_sweep, sweep] = genera_sweep(cfg);
 
-% --- Cargar los 4 canales ---
+% Cargar los 4 canales
 recorded = [];
 for ch = 1:cfg.nCh
     fichero = fullfile(cfg.carpeta, sprintf('canal_%d.mat', ch));
@@ -18,14 +18,12 @@ for ch = 1:cfg.nCh
 end
 fprintf('--> Los 4 canales presentes. Procesando...\n\n');
 
-% --- Deconvolucion por canal ---
 Lconv  = size(recorded,1)+length(inv_sweep)-1;
 IRfull = zeros(Lconv, cfg.nCh);
 for ch = 1:cfg.nCh
     IRfull(:,ch) = conv(recorded(:,ch), inv_sweep);
 end
 
-% --- ALINEACION POR REFERENCIA COMUN ---
 energia    = sum(IRfull.^2,1);
 [~, chRef] = max(energia);
 [~, pkRef] = max(abs(IRfull(:,chRef)));
@@ -35,13 +33,11 @@ pre    = 100;
 ini    = max(pkRef - pre, 1);
 IR     = IRfull(ini : ini+IR_len-1, :);
 
-% --- Respuesta en frecuencia ---
 NFFT = 2^nextpow2(size(IR,1));
 H    = fft(IR, NFFT);
 f    = (0:NFFT/2-1)*(cfg.fs/NFFT);
 Hmag = 20*log10(abs(H(1:NFFT/2,:)) + eps);
 
-% --- Retardos relativos entre capsulas ---
 fprintf('--- Retardos relativos entre capsulas ---\n');
 for ch = 1:cfg.nCh
     [~, pkCh]  = max(abs(IR(:,ch)));
@@ -51,7 +47,6 @@ for ch = 1:cfg.nCh
 end
 fprintf('\n');
 
-% --- Visualizacion ---
 figure('Name','IR por canal','Position',[100 100 900 600]);
 for ch = 1:cfg.nCh
     subplot(cfg.nCh,1,ch);
